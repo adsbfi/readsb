@@ -153,6 +153,7 @@ static void configSetDefaults(void) {
     Modes.netIngest = 0;
     Modes.uuidFile = strdup("/usr/local/share/adsbfi/adsbfi-uuid");
     Modes.json_trace_interval = 20 * 1000;
+    Modes.state_write_interval = 1 * HOURS;
     Modes.heatmap_current_interval = -15;
     Modes.heatmap_interval = 60 * SECONDS;
     Modes.json_reliable = -13;
@@ -223,7 +224,7 @@ static void configSetDefaults(void) {
     Modes.ping_reduce = PING_REDUCE;
     Modes.ping_reject = PING_REJECT;
 
-    Modes.binCraftVersion = 20220916;
+    Modes.binCraftVersion = 20240218;
     Modes.messageRateMult = 1.0f;
 
     Modes.apiShutdownDelay = 0 * SECONDS;
@@ -1342,6 +1343,8 @@ static int make_net_connector(char *arg) {
             && strcmp(con->protocol, "sbs_out_mlat") != 0
             && strcmp(con->protocol, "sbs_out_jaero") != 0
             && strcmp(con->protocol, "sbs_out_prio") != 0
+            && strcmp(con->protocol, "asterix_out") != 0
+            && strcmp(con->protocol, "asterix_in") != 0
             && strcmp(con->protocol, "json_out") != 0
             && strcmp(con->protocol, "feedmap_out") != 0
             && strcmp(con->protocol, "gpsd_in") != 0
@@ -1352,6 +1355,7 @@ static int make_net_connector(char *arg) {
         fprintf(stderr, "Supported protocols: beast_out, beast_in, beast_reduce_out, beast_reduce_plus_out, raw_out, raw_in, \n"
                 "sbs_out, sbs_out_replay, sbs_out_mlat, sbs_out_jaero, \n"
                 "sbs_in, sbs_in_mlat, sbs_in_jaero, \n"
+                "sbs_out_prio, asterix_out, asterix_in, \n"
                 "vrs_out, json_out, gpsd_in, uat_in, \n"
                 "planefinder_in\n");
         return 1;
@@ -1552,6 +1556,14 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         case OptStateOnlyOnExit:
             Modes.state_only_on_exit = 1;
             break;
+        case OptStateInterval:
+            Modes.state_write_interval = (int64_t) (atof(arg) * 1.0 * SECONDS);
+            if (Modes.state_write_interval < 59 * SECONDS) {
+                fprintf(stderr, "ERROR: --write-state-every less than 60 seconds (specified: %s)\n", arg);
+                exit(1);
+                Modes.state_write_interval = 1 * HOURS;
+            }
+            break;
         case OptStateDir:
             sfree(Modes.state_parent_dir);
             Modes.state_parent_dir = strdup(arg);
@@ -1566,7 +1578,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
             break;
 
         case OptJaeroTimeout:
-            Modes.trackExpireJaero = (uint32_t) (atof(arg) * MINUTES);
+            Modes.trackExpireJaero = (int64_t) (atof(arg) * MINUTES);
             break;
         case OptPositionPersistence:
             Modes.position_persistence = imax(0, atoi(arg));
@@ -1638,6 +1650,17 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         case OptNetBiPorts:
             sfree(Modes.net_input_beast_ports);
             Modes.net_input_beast_ports = strdup(arg);
+            break;
+        case OptNetAsterixOutPorts:
+            sfree(Modes.net_output_asterix_ports);
+            Modes.net_output_asterix_ports = strdup(arg);
+            break;
+	case OptNetAsterixInPorts:
+	    sfree(Modes.net_input_asterix_ports);
+	    Modes.net_input_asterix_ports = strdup(arg);
+	    break;
+        case OptNetAsterixReduce:
+            Modes.asterixReduce = 1;
             break;
         case OptNetBeastReducePorts:
             sfree(Modes.net_output_beast_reduce_ports);
@@ -1932,9 +1955,19 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         case OptBladeDecim:
         case OptBladeBw:
 #endif
+#ifdef ENABLE_HACKRF
+	case OptHackRfGainEnable:
+        case OptHackRfVgaGain:
+#endif
 #ifdef ENABLE_PLUTOSDR
         case OptPlutoUri:
         case OptPlutoNetwork:
+#endif
+#ifdef ENABLE_SOAPYSDR
+        case OptSoapyAntenna:
+        case OptSoapyBandwith:
+        case OptSoapyEnableAgc:
+        case OptSoapyGainElement:
 #endif
             if (Modes.sdr_type == SDR_NONE) {
                 fprintf(stderr, "ERROR: SDR / device type specific options must be specified AFTER the --device-type xyz parameter.\n");
@@ -1999,6 +2032,9 @@ int parseCommandLine(int argc, char **argv) {
 #endif
 #ifdef ENABLE_PLUTOSDR
         "ENABLE_PLUTOSDR "
+#endif
+#ifdef ENABLE_SOAPYSDR
+        "ENABLE_SOAPYSDR "
 #endif
 #ifdef SC16Q11_TABLE_BITS
 #define stringize(x) _stringize(x)
@@ -2263,12 +2299,13 @@ static void miscStuff(int64_t now) {
             nextOutlineWrite = now + 15 * SECONDS;
         }
 
-        if (!Modes.state_only_on_exit) {
-            static int64_t nextRangeDirsWrite;
-            if (now > nextRangeDirsWrite) {
-                nextRangeDirsWrite = now + 5 * MINUTES;
-                writeRangeDirs();
+        static int64_t nextRangeDirsWrite;
+        if (now > nextRangeDirsWrite) {
+            nextRangeDirsWrite = now + 5 * MINUTES;
+            if (Modes.state_only_on_exit) {
+                nextRangeDirsWrite = now + 6 * HOURS;
             }
+            writeRangeDirs();
         }
     }
 
@@ -2308,10 +2345,20 @@ static void miscStuff(int64_t now) {
         // only continuously write state if we keep permanent trace
         if (!Modes.state_only_on_exit && now > next_blob) {
             //fprintf(stderr, "save_blob: %02x\n", blob);
-            notask_save_blob(blob);
-            blob = (blob + 1) % STATE_BLOBS;
-            next_blob = now + 60 * MINUTES / STATE_BLOBS;
+            int64_t blob_interval = Modes.state_write_interval / STATE_BLOBS;
+            next_blob = now + blob_interval;
 
+            struct timespec watch;
+            startWatch(&watch);
+
+            notask_save_blob(blob);
+
+            int64_t elapsed = stopWatch(&watch);
+            if (elapsed > 0.5 * SECONDS || elapsed > blob_interval / 3) {
+                fprintf(stderr, "WARNING: save_blob %02x took %"PRIu64" ms!\n", blob, elapsed);
+            }
+
+            blob = (blob + 1) % STATE_BLOBS;
             return;
         }
     }
