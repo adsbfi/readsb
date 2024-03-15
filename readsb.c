@@ -149,6 +149,7 @@ static void configSetDefaults(void) {
     Modes.net_sndbuf_size = 2; // Default to 256 kB SNDBUF / RCVBUF
     Modes.net_output_flush_size = 1280; // Default to 1280 Bytes
     Modes.net_output_flush_interval = 50; // Default to 50 ms
+    Modes.net_output_flush_interval_beast_reduce = -1; // default to net_output_flush_interval after config parse if not configured
     Modes.netReceiverId = 0;
     Modes.netIngest = 0;
     Modes.uuidFile = strdup("/usr/local/share/adsbfi/adsbfi-uuid");
@@ -1629,11 +1630,11 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         case OptNetRoSize:
             Modes.net_output_flush_size = atoi(arg);
             break;
-        case OptNetRoRate:
-            Modes.net_output_flush_interval = 1000 * atoi(arg) / 15; // backwards compatibility
-            break;
-        case OptNetRoIntervall:
+        case OptNetRoInterval:
             Modes.net_output_flush_interval = (int64_t) (1000 * atof(arg));
+            break;
+        case OptNetRoIntervalBeastReduce:
+            Modes.net_output_flush_interval_beast_reduce = (int64_t) (1000 * atof(arg));
             break;
         case OptNetRoPorts:
             sfree(Modes.net_output_raw_ports);
@@ -2187,6 +2188,8 @@ static void configAfterParse() {
                 Modes.position_persistence);
     }
 
+    Modes.net_output_flush_size -= 8; // allow for sending 8 byte timestamp in some cases, unfortunate hack
+
     if (Modes.net_output_flush_size > (MODES_OUT_BUF_SIZE)) {
         Modes.net_output_flush_size = MODES_OUT_BUF_SIZE;
     }
@@ -2198,6 +2201,18 @@ static void configAfterParse() {
     }
     if (Modes.net_output_flush_interval < 0)
         Modes.net_output_flush_interval = 0;
+
+    if (Modes.net_output_flush_interval < 51 && Modes.sdr_type != SDR_NONE && !(Modes.sdr_type == SDR_MODESBEAST || Modes.sdr_type == SDR_GNS)) {
+        // the SDR code runs the network tasks about every 50ms
+        // avoid delay by just flushing every call of the network tasks
+        // somewhat hacky, anyone reading this code surprised at this point?
+        Modes.net_output_flush_interval = 0;
+    }
+
+    if (Modes.net_output_flush_interval_beast_reduce < 0) {
+        Modes.net_output_flush_interval_beast_reduce = Modes.net_output_flush_interval;
+    }
+
 
     if (Modes.net_sndbuf_size > (MODES_NET_SNDBUF_MAX)) {
         Modes.net_sndbuf_size = MODES_NET_SNDBUF_MAX;
