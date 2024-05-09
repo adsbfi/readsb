@@ -527,6 +527,8 @@ struct _Modes
     iq_convert_fn converter_function;
     char * dev_name;
     int gain;
+    int sdrInitialized;
+    pthread_mutex_t sdrControlMutex;
     int dc_filter; // should we apply a DC filter?
     int enable_agc;
     sdr_type_t sdr_type; // where are we getting data from?
@@ -594,6 +596,7 @@ struct _Modes
     struct net_writer vrs_out; // SBS-format output
     struct net_writer fatsv_out; // FATSV-format output
     struct net_writer gpsd_in; // for sending 1 line to gpsd
+    struct net_writer uat_replay_out; // UAT replay output
     struct net_service *beast_in_service;
     struct net_service *uat_in_service;
 
@@ -723,6 +726,8 @@ struct _Modes
     int32_t net_output_beast_reduce_interval; // Position update interval for data reduction
     int32_t ping_reduce;
     int32_t ping_reject;
+    int32_t log_usb_jitter;
+    int32_t devel_log_ppm;
     int64_t doubleBeastReduceIntervalUntil;
     float beast_reduce_filter_distance;
     float beast_reduce_filter_altitude;
@@ -736,15 +741,20 @@ struct _Modes
     double fUserLat; // Users receiver/antenna lat/lon needed for initial surface location
     double fUserLon; // Users receiver/antenna lat/lon needed for initial surface location
     double maxRange; // Absolute maximum decoding range, in *metres*
+    char *latString;
+    char *lonString;
     double sample_rate; // actual sample rate in use (in hz)
     int64_t interactive_display_ttl; // Interactive mode: TTL display
     int64_t json_interval; // Interval between rewriting the json aircraft file, in milliseconds; also the advertised map refresh interval
     int64_t stats_display_interval; // Interval (millis) between stats dumps,
     int64_t range_outline_duration;
     int64_t writeTracesActualDuration; // how long the trace writing cycle took
+    int64_t auto_exit;
     char *db_file;
     char *net_output_raw_ports; // List of raw output TCP ports
     char *net_input_raw_ports; // List of raw input TCP ports
+    char *net_output_uat_replay_ports; // List of UAT replay output TCP ports
+    char *net_input_uat_ports; // List of UAT input TCP ports
     char *net_input_planefinder_ports; // List of planefinder input TCP ports
     char *net_output_sbs_ports; // List of SBS output TCP ports
     char *net_input_sbs_ports; // List of SBS input TCP ports
@@ -814,6 +824,7 @@ struct _Modes
     int json_aircraft_history_next;
     int json_aircraft_history_full;
     int trace_hist_only;
+    int sbsOverrideSquawk;
     float messageRateMult;
     uint32_t binCraftVersion; // never change the type for this variable
     int8_t userLocationValid;
@@ -997,7 +1008,8 @@ struct modesMessage
     int baro_rate; // Rate of change of barometric altitude, feet/minute
     int geom_rate; // Rate of change of geometric (GNSS / INS) altitude, feet/minute
     char callsign[16]; // 8 chars flight number, NUL-terminated
-    unsigned squawk; // 13 bits identity (Squawk), encoded as 4 hex digits
+    uint32_t squawkHex; // 13 bits identity (Squawk), encoded as 4 hex digits
+    uint32_t squawkDec; // Squawk as a decimal number
     unsigned category; // A0 - D7 encoded as a single hex byte
     emergency_t emergency; // emergency/priority status
 
@@ -1140,6 +1152,7 @@ enum {
     OptNoFixDf,
     OptAggressive,
     OptMlat,
+    OptAutoExit,
     OptStats,
     OptStatsRange,
     OptStatsEvery,
@@ -1186,6 +1199,8 @@ enum {
     OptNetBindAddr,
     OptNetRiPorts,
     OptNetRoPorts,
+    OptNetUatReplayPorts,
+    OptNetUatInPorts,
     OptNetSbsPorts,
     OptNetSbsInPorts,
     OptNetJaeroPorts,

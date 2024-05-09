@@ -14,7 +14,7 @@ PRINT_UUIDS ?= no
 DIALECT = -std=c11
 CFLAGS = $(DIALECT) -W -D_GNU_SOURCE -D_DEFAULT_SOURCE -Wall -Werror -fno-common -O2
 CFLAGS += -DMODES_READSB_VERSION=\"$(READSB_VERSION)\"
-CFLAGS += -Wdate-time -D_FORTIFY_SOURCE=2 -fstack-protector-strong -Wformat -Werror=format-security
+CFLAGS += -Wdate-time -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fstack-protector-strong -Wformat -Werror=format-security
 
 LIBS = -pthread -lpthread -lm -lrt -lzstd
 
@@ -28,7 +28,7 @@ ifeq ($(shell $(CC) -c feature_test.c -o feature_test.o -Wno-format-truncation -
 	CFLAGS += -Wno-format-truncation
 endif
 
-ifeq ($(shell uname -m | grep -qs -e arm >/dev/null 2>&1 && echo 1 || echo 0), 1)
+ifeq ($(shell uname -m | grep -qs -e arm -e aarch64 >/dev/null 2>&1 && echo 1 || echo 0), 1)
   CFLAGS += -DSC16Q11_TABLE_BITS=8
 endif
 
@@ -36,6 +36,11 @@ ifeq ($(DISABLE_INTERACTIVE), yes)
   CFLAGS += -DDISABLE_INTERACTIVE
 else
   LIBS += -lncurses
+endif
+
+# only disable workaround if zerocopy is disabled in librtlsdr, otherwise expect significantly increased CPU use
+ifeq ($(DISABLE_RTLSDR_ZEROCOPY_WORKAROUND), yes)
+  CFLAGS += -DDISABLE_RTLSDR_ZEROCOPY_WORKAROUND
 endif
 
 ifeq ($(HISTORY), yes)
@@ -72,6 +77,10 @@ endif
 
 ifeq ($(PRINT_UUIDS), yes)
   CFLAGS += -DPRINT_UUIDS
+endif
+
+ifneq ($(RECENT_RECEIVER_IDS),)
+  CFLAGS += -DRECENT_RECEIVER_IDS=$(RECENT_RECEIVER_IDS)
 endif
 
 ifeq ($(RTLSDR), yes)

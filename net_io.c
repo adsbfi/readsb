@@ -109,6 +109,7 @@ static void drainMessageBuffer(struct messageBuffer *buf);
 static const char beast_heartbeat_msg[] = {0x1a, '1', 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const char raw_heartbeat_msg[] = "*0000;\n";
 static const char sbs_heartbeat_msg[] = "\r\n"; // is there a better one?
+//static const char newline_heartbeat_msg[] = "\n";
 // CAUTION: sizeof includes the trailing \0 byte
 
 static const heartbeat_t beast_heartbeat = {
@@ -127,6 +128,12 @@ static const heartbeat_t no_heartbeat = {
     .msg = NULL,
     .len = 0
 };
+/*
+static const heartbeat_t newline_heartbeat = {
+    .msg = newline_heartbeat_msg,
+    .len = sizeof(newline_heartbeat_msg) - 1
+};
+*/
 
 //
 //=========================================================================
@@ -217,6 +224,11 @@ static uint8_t char_to_ais(int ch)
 }
 
 static int sendFiveHeartbeats(struct client *c, int64_t now) {
+    // only send 5 heartbeats for beast type output
+    if (c->service->heartbeat_out.msg != beast_heartbeat.msg) {
+        return 0;
+    }
+    //fprintf(stderr, "sending 5 hbs\n");
     // send 5 heartbeats to signal that we are a client that can accomodate feedback .... some counterparts crash if they get stuff they don't understand
     // this is really a crutch, but there is no other good way to signal this without causing issues
     int repeats = 5;
@@ -757,8 +769,7 @@ void serviceListen(struct net_service *service, char *bind_addr, char *bind_port
                 exit(1);
             }
         }
-        static int listenerCount;
-        listenerCount++;
+
         char listenString[1024];
         snprintf(listenString, 1023, "%5s: %s port", buf, service->descr);
         fprintf(stderr, "%-38s\n", listenString);
@@ -848,6 +859,7 @@ void modesInitNet(void) {
     struct net_service *beast_out;
     struct net_service *beast_reduce_out;
     struct net_service *garbage_out;
+    struct net_service *uat_replay_service;
     struct net_service *raw_out;
     struct net_service *raw_in;
     struct net_service *vrs_out;
@@ -874,6 +886,9 @@ void modesInitNet(void) {
     // set up listeners
     raw_out = serviceInit(&Modes.services_out, "Raw TCP output", &Modes.raw_out, raw_heartbeat, no_heartbeat, READ_MODE_IGNORE, NULL, NULL);
     serviceListen(raw_out, Modes.net_bind_address, Modes.net_output_raw_ports, Modes.net_epfd);
+
+    uat_replay_service = serviceInit(&Modes.services_out, "UAT TCP replay output", &Modes.uat_replay_out, no_heartbeat, no_heartbeat, READ_MODE_IGNORE, NULL, NULL);
+    serviceListen(uat_replay_service, Modes.net_bind_address, Modes.net_output_uat_replay_ports, Modes.net_epfd);
 
     beast_out = serviceInit(&Modes.services_out, "Beast TCP output", &Modes.beast_out, beast_heartbeat, no_heartbeat, READ_MODE_BEAST_COMMAND, NULL, handleBeastCommand);
     serviceListen(beast_out, Modes.net_bind_address, Modes.net_output_beast_ports, Modes.net_epfd);
@@ -1003,8 +1018,7 @@ void modesInitNet(void) {
     serviceListen(planefinder_in, Modes.net_bind_address, Modes.net_input_planefinder_ports, Modes.net_epfd);
 
     Modes.uat_in_service = serviceInit(&Modes.services_in, "UAT TCP input", NULL, no_heartbeat, no_heartbeat, READ_MODE_ASCII, "\n", decodeUatMessage);
-    // for testing ... don't care to create an argument to open this port
-    // serviceListen(Modes.uat_in_service, Modes.net_bind_address, "1234", Modes.net_epfd);
+    serviceListen(Modes.uat_in_service, Modes.net_bind_address, Modes.net_input_uat_ports, Modes.net_epfd);
 
     for (int i = 0; i < Modes.net_connectors_count; i++) {
         struct net_connector *con = &Modes.net_connectors[i];
@@ -1055,6 +1069,8 @@ void modesInitNet(void) {
             con->service = gpsd_in;
         else if (strcmp(con->protocol, "uat_in") == 0)
             con->service = Modes.uat_in_service;
+        else if (strcmp(con->protocol, "uat_replay_out") == 0)
+            con->service = uat_replay_service;
 
     }
 
@@ -2126,7 +2142,8 @@ static int decodeAsterixMessage(struct client *c, char *p, int remote, int64_t n
                 }
             }
             if (fspec[2] & 0x8){ // I021/070 Mode 3/A Code
-                mm->squawk += (((*p & 0xe) << 11) + ((*p & 0x1) << 10) + ((*(p + 1) & 0xC0) << 2) + ((*(p + 1) & 0x38) << 1) + ((*(p + 1) & 0x7))) ;
+                mm->squawkHex = (((*p & 0xe) << 11) + ((*p & 0x1) << 10) + ((*(p + 1) & 0xC0) << 2) + ((*(p + 1) & 0x38) << 1) + ((*(p + 1) & 0x7))) ;
+                mm->squawkDec = squawkHex2Dec(mm->squawkHex);
                 mm->squawk_valid = true;
                 p += 2;
             }
@@ -2573,7 +2590,7 @@ static void modesSendAsterixOutput(struct modesMessage *mm, struct net_writer *w
         // I021/070 Mode 3/A Code
         if(mm->squawk_valid){
             fspec[2] |= 1 << 3;
-            uint16_t squawk = mm->squawk;
+            uint16_t squawk = mm->squawkHex;
             bytes[p]   |= ((squawk & 0x7000)) >> 11;
             bytes[p++] |= ((squawk & 0x0400)) >> 10;
             bytes[p]   |= ((squawk & 0x0300)) >> 2;
@@ -3025,9 +3042,10 @@ static int decodeSbsLine(struct client *c, char *line, int remote, int64_t now, 
     if (t[18] && strlen(t[18]) > 0) {
         long int tmp = strtol(t[18], NULL, 10);
         if (tmp > 0) {
-            mm->squawk = (tmp / 1000) * 16*16*16 + (tmp / 100 % 10) * 16*16 + (tmp / 10 % 10) * 16 + (tmp % 10);
+            mm->squawkDec = tmp;
+            mm->squawkHex = squawkDec2Hex(mm->squawkDec);
             mm->squawk_valid = 1;
-            //fprintf(stderr, "squawk: %04x %s, ", mm->squawk, t[18]);
+            //fprintf(stderr, "squawk: %04x %s, ", mm->squawkHex, t[18]);
         }
     }
     // field 19 (originally squawk change) used to indicate by some versions of mlat-server the number of receivers which contributed to the postiions
@@ -3267,8 +3285,10 @@ static void modesSendSBSOutput(struct modesMessage *mm, struct aircraft *a, stru
     }
 
     // Field 18 is  the Squawk (if we have it)
-    if (mm->squawk_valid) {
-        p += sprintf(p, ",%04x", mm->squawk);
+    if (Modes.sbsOverrideSquawk != -1) {
+        p += sprintf(p, ",%04d", Modes.sbsOverrideSquawk);
+    } else if (mm->squawk_valid) {
+        p += sprintf(p, ",%04d", mm->squawkDec);
     } else {
         p += sprintf(p, ",");
     }
@@ -3297,7 +3317,7 @@ static void modesSendSBSOutput(struct modesMessage *mm, struct aircraft *a, stru
         }
     } else if (mm->squawk_valid) {
         // Field 20 is the Squawk Emergency flag (if we have it)
-        if ((mm->squawk == 0x7500) || (mm->squawk == 0x7600) || (mm->squawk == 0x7700)) {
+        if ((mm->squawkHex == 0x7500) || (mm->squawkHex == 0x7600) || (mm->squawkHex == 0x7700)) {
             p += sprintf(p, ",-1");
         } else {
             p += sprintf(p, ",0");
@@ -4220,11 +4240,29 @@ static int processHexMessage(struct client *c, char *hex, int remote, int64_t no
     return (0);
 }
 
+static void replayUatMsg(char *msg, int msgLen) {
+    char *p = prepareWrite(&Modes.uat_replay_out, msgLen + 1);
+    if (!p) {
+        return;
+    }
+
+    memcpy(p, msg, msgLen);
+    p += msgLen;
+    *p++ = '\n';
+    completeWrite(&Modes.uat_replay_out, p);
+
+    return;
+}
+
+
 static int decodeUatMessage(struct client *c, char *msg, int remote, int64_t now, struct messageBuffer *mb) {
     MODES_NOTUSED(remote);
 
-    char *end = msg + strlen(msg);
+    int msgLen = strlen(msg);
+    char *end = msg + msgLen;
     char output[512];
+
+    replayUatMsg(msg, msgLen);
 
     uat2esnt_convert_message(msg, end, output, output + sizeof(output));
 

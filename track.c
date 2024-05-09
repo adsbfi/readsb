@@ -1006,6 +1006,29 @@ static void setPosition(struct aircraft *a, struct modesMessage *mm, int64_t now
         mm->client->positionCounter++;
     }
 
+#if defined(PRINT_UUIDS)
+    {
+        int64_t oldestTime = now;
+        int64_t overwriteOlder = now - 60 * SECONDS;
+        idTime *overwrite = &a->recentReceiverIds[0];
+        for (int i = 0; i < RECENT_RECEIVER_IDS; i++) {
+            idTime *entry = &a->recentReceiverIds[i];
+            if (entry->id == mm->receiverId) {
+                overwrite = entry;
+                break;
+            }
+            // if we already found an entry to overwrite (older than 60 seconds)
+            // then look no further for an entry to overwrite
+            if (oldestTime > overwriteOlder && entry->time < oldestTime) {
+                oldestTime = entry->time;
+                overwrite = entry;
+            }
+        }
+        overwrite->id = mm->receiverId;
+        overwrite->time = now;
+    }
+#endif
+
     if (mm->duplicate) {
         Modes.stats_current.pos_duplicate++;
         return;
@@ -1077,25 +1100,6 @@ static void setPosition(struct aircraft *a, struct modesMessage *mm, int64_t now
             a->receiverCount = div;
         }
     }
-#if defined(PRINT_UUIDS)
-    {
-        int done = 0;
-        for (int i = 0; i < RECENT_RECEIVER_IDS; i++) {
-            idTime *entry = &a->recentReceiverIds[i];
-            if (entry->id == mm->receiverId) {
-                entry->time = now;
-                done = 1;
-                break;
-            }
-        }
-        if (!done) {
-            a->recentReceiverIdsNext = (a->recentReceiverIdsNext + 1) % RECENT_RECEIVER_IDS;
-            idTime *entry = &a->recentReceiverIds[a->recentReceiverIdsNext];
-            entry->id = mm->receiverId;
-            entry->time = now;
-        }
-    }
-#endif
 
     if (Modes.netReceiverId && posReliable(a)) {
 
@@ -1816,7 +1820,7 @@ struct aircraft *trackUpdateFromMessage(struct modesMessage *mm) {
 
     if (mm->msgtype == DFTYPE_MODEAC) {
         // Mode A/C, just count it (we ignore SPI)
-        modeAC_count[modeAToIndex(mm->squawk)]++;
+        modeAC_count[modeAToIndex(mm->squawkHex)]++;
         res = NULL;
         goto exit;
     }
@@ -2020,22 +2024,22 @@ struct aircraft *trackUpdateFromMessage(struct modesMessage *mm) {
         uint32_t oldsquawk = a->squawk;
 
         int changeTentative = 0;
-        if (a->squawkTentative != mm->squawk && now - a->seen < 15 * SECONDS && will_accept_data(&a->squawk_valid, mm->source, mm, a)) {
+        if (a->squawkTentative != mm->squawkHex && now - a->seen < 15 * SECONDS && will_accept_data(&a->squawk_valid, mm->source, mm, a)) {
             a->squawk_valid.next_reduce_forward = now + currentReduceInterval(now);
             mm->reduce_forward = 1;
             PPforward;
             changeTentative = 1;
         }
         if (
-                (mm->source == SOURCE_JAERO || (a->squawkTentative == mm->squawk && now - a->squawkTentativeChanged > 750))
+                (mm->source == SOURCE_JAERO || (a->squawkTentative == mm->squawkHex && now - a->squawkTentativeChanged > 750))
                 && accept_data(&a->squawk_valid, mm->source, mm, a, REDUCE_RARE)) {
-            if (mm->squawk != a->squawk) {
+            if (mm->squawkHex != a->squawk) {
                 a->modeA_hit = 0;
             }
-            a->squawk = mm->squawk;
+            a->squawk = mm->squawkHex;
         }
         if (changeTentative) {
-            a->squawkTentative = mm->squawk;
+            a->squawkTentative = mm->squawkHex;
             a->squawkTentativeChanged = now;
         }
 
@@ -2052,7 +2056,7 @@ struct aircraft *trackUpdateFromMessage(struct modesMessage *mm) {
                             a->addr,
                             mm->msgtype,
                             a->squawk,
-                            mm->squawk,
+                            mm->squawkHex,
                             uuid);
                 }
             } else {
@@ -3660,9 +3664,6 @@ static void incrementReliable(struct aircraft *a, struct modesMessage *mm, int64
     float increment = 1.0f;
     if (mm->pos_receiver_range_exceeded) {
         increment = 0.25f;
-    }
-    if (mm->source == SOURCE_SBS) {
-        increment = 0.5f;
     }
 
     if (odd)

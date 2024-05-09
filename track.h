@@ -83,7 +83,9 @@ int nogps(int64_t now, struct aircraft *a);
 
 #define RECEIVERIDBUFFER (12)
 
+#ifndef RECENT_RECEIVER_IDS
 #define RECENT_RECEIVER_IDS (32)
+#endif
 
 typedef struct
 {
@@ -725,6 +727,16 @@ static inline unsigned
 indexToModeA (unsigned index)
 {
   return (index & 0007) | ((index & 0070) << 1) | ((index & 0700) << 2) | ((index & 07000) << 3);
+}
+
+/* convert from (hex) squawk to (dec) squawk */
+static inline uint32_t squawkHex2Dec(uint32_t s) {
+    return ( (s & 0xf000) / 0x1000 * 1000 + (s & 0x0f00) / 0x100 * 100 + (s & 0x00f0) / 0x10 * 10 + (s & 0x000f) / 0x1 * 1);
+}
+
+/* convert from (dec) squawk to (hex) squawk */
+static inline uint32_t squawkDec2Hex(uint32_t s) {
+    return ( (s / 1000 % 10) * 16*16*16 + (s / 100 % 10) * 16*16 + (s / 10 % 10) * 16 + (s % 10) );
 }
 
 static inline int bogus_lat_lon(double lat, double lon) {
