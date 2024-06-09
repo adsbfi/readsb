@@ -46,7 +46,7 @@ static struct argp_option optionsViewadsb[] = {
     {"quiet", OptQuiet, 0, 0, "Disable output (default)", 1},
     {"debug", OptDebug, "<flags>", 0, "Debug mode (verbose), n: network, P: CPR, S: speed check", 1},
     {0,0,0,0, "Network options:", 2},
-    {"net-connector", OptNetConnector, "<ip,port,protocol>", 0, "Establish connection, can be specified multiple times (e.g. 127.0.0.1,23004,beast_out) Protocols: beast_out, beast_in, raw_out, raw_in, sbs_in, sbs_in_jaero, sbs_out, sbs_out_jaero, vrs_out, json_out, gpsd_in, uat_in, uat_replay_out, planefinder_in, asterix_in, asterix_out (one failover ip/address,port can be specified: primary-address,primary-port,protocol,failover-address,failover-port) (any position in the comma separated list can also be either silent_fail or uuid=<uuid>)", 2},
+    {"net-connector", OptNetConnector, "<ip,port,protocol>", 0, "Establish connection, can be specified multiple times (viewadsb default: --net-connector 127.0.0.1,30005,beast_in viewadsb first usage overrides default, second usage adds another input/output) Protocols: beast_out, beast_in, raw_out, raw_in, sbs_in, sbs_in_jaero, sbs_out, sbs_out_jaero, vrs_out, json_out, gpsd_in, uat_in, uat_replay_out, planefinder_in, asterix_in, asterix_out (one failover ip/address,port can be specified: primary-address,primary-port,protocol,failover-address,failover-port) (any position in the comma separated list can also be either silent_fail or uuid=<uuid>)", 2},
     {0,0,0,0, "Help options:", 100},
     { 0 }
 };
@@ -144,6 +144,7 @@ static struct argp_option optionsReadsb[] = {
     {"tar1090-use-api", OptTar1090UseApi, 0, 0, "when running with globe-index, signal tar1090 use the readsb API to get data, requires webserver mapping of /tar1090/re-api to proxy_pass the requests to the --net-api-port, see nginx-readsb-api.conf in the tar1090 repository for details", 2},
     {"net-beast-reduce-out-port", OptNetBeastReducePorts, "<ports>", 0, "TCP BeastReduce output listen ports (default: 0)", 2},
     {"net-beast-reduce-interval", OptNetBeastReduceInterval, "<seconds>", 0, "BeastReduce data update interval, longer means less data (default: 0.250, valid range: 0.000 - 14.999)", 2},
+    {"net-beast-reduce-optimize-for-mlat", OptNetBeastReduceOptimizeMlat, 0, 0, "BeastReduce output: keep all messages relevant to mlat-client", 2},
     {"net-beast-reduce-filter-dist", OptNetBeastReduceFilterDist, "<distance in nmi>", 0, "beast-reduce: remove aircraft which are further than distance from the receiver", 2},
     {"net-beast-reduce-filter-alt", OptNetBeastReduceFilterAlt, "<pressure altitude in ft>", 0, "beast-reduce: remove aircraft which are above altitude", 2},
     {"net-sbs-reduce", OptNetSbsReduce, 0, 0, "Apply beast reduce logic and interval to SBS outputs", 2},

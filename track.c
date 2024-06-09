@@ -2302,6 +2302,11 @@ struct aircraft *trackUpdateFromMessage(struct modesMessage *mm) {
     }
 
 
+    if (Modes.beast_reduce_optimize_mlat) {
+        if (mm->cpr_valid || a->position_valid.source < SOURCE_ADSR) {
+            mm->reduce_forward = 1;
+        }
+    }
 
     if (mm->acas_ra_valid) {
 
@@ -2650,7 +2655,10 @@ exit:
             || (Modes.show_only != BADDR && (mm->addr == Modes.show_only || mm->maybe_addr == Modes.show_only))
             || (Modes.debug_7700 && ac && ac->squawk == 0x7700 && trackDataValid(&ac->squawk_valid))
        ) {
-        displayModesMessage(mm);
+        // filter messages with unwanted DF types (sbs_in are unknown DF type, filter them all, this is arbitrary but no one cares anyway)
+        if (!(Modes.filterDF && (mm->sbs_in || !(Modes.filterDFbitset & (1 << mm->msgtype))))) {
+            displayModesMessage(mm);
+        }
     }
 
     if (Modes.debug_bogus) {
